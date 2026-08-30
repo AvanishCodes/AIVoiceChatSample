@@ -9,11 +9,19 @@ from app.data_layer.entity_resolver import entity_resolver
 from app.data_layer.models import SqlQueryResult
 from app.mcp.client import mcp_client
 
+from datetime import datetime
+
 logger = logging.getLogger("fleetpanda.sql_agent")
 
-DISPATCH_SCHEMA_PROMPT = """
+def get_schema_prompt() -> str:
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    return f"""
 You are FleetPanda's expert Text-to-SQL data assistant.
 Generate clean, valid SQLite SELECT queries based on the database schema below.
+
+CURRENT CONTEXT:
+- System Current Date: {today_str}
+- Latest Operational Date in Snapshot: 2026-05-29 (90-day operational dataset)
 
 DATABASE SCHEMA:
 - customers (customer_id INTEGER PK, tenant_id INTEGER, name TEXT, region TEXT, fleet_size INTEGER, status TEXT, created_at TEXT)
