@@ -85,3 +85,22 @@ async def test_benchmark_q8_declining_delivery_volume():
     for r in res.results:
         assert r["change"] < 0
 
+
+@pytest.mark.asyncio
+async def test_dynamic_time_ranges():
+    # Test arbitrary 48 days for Tenant 1
+    ans48, res48 = await sql_agent.answer_question("How many deliveries were completed in the last 48 days?", tenant_id=1)
+    assert res48.error is None
+    assert res48.results[0]["completed_deliveries"] == 210
+
+    # Test arbitrary 4 days for Tenant 1
+    ans4, res4 = await sql_agent.answer_question("How many deliveries were completed in the last 4 days?", tenant_id=1)
+    assert res4.error is None
+    assert res4.results[0]["completed_deliveries"] == 25
+
+    # Test 7 days for Tenant 1
+    ans7, res7 = await sql_agent.answer_question("How many deliveries were completed in the last 7 days?", tenant_id=1)
+    assert res7.error is None
+    assert res7.results[0]["completed_deliveries"] == 34
+
+

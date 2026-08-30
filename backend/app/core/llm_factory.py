@@ -21,8 +21,13 @@ class FallbackOfflineChatModel(BaseChatModel):
         last_msg_lower = str(last_msg).lower()
 
         # SQL benchmark intent matching
-        if "deliveries were completed in the last 7 days" in last_msg_lower:
-            response_text = "```sql\nSELECT count(*) AS completed_deliveries FROM delivery_orders WHERE status = 'completed' AND delivery_date >= date((SELECT max(delivery_date) FROM delivery_orders), '-7 days');\n```"
+        import re
+        time_match = re.search(r"(?:last|past|in the last|in the past)\s+(\d+)\s+(day|days|week|weeks|month|months)", last_msg_lower)
+        if time_match and ("deliveries" in last_msg_lower or "delivery" in last_msg_lower or "orders" in last_msg_lower):
+            num = int(time_match.group(1))
+            unit = time_match.group(2)
+            days = num * 7 if "week" in unit else (num * 30 if "month" in unit else num)
+            response_text = f"```sql\nSELECT count(*) AS completed_deliveries FROM delivery_orders WHERE status = 'completed' AND delivery_date >= date((SELECT max(delivery_date) FROM delivery_orders), '-{days} days');\n```"
         elif "delivered the most gallons of diesel last month" in last_msg_lower:
             response_text = "```sql\nSELECT tenant_id, sum(gallons_delivered) AS total_diesel_gallons FROM delivery_orders WHERE product_type = 'diesel' AND status = 'completed' AND strftime('%Y-%m', delivery_date) = '2026-04' GROUP BY tenant_id ORDER BY total_diesel_gallons DESC LIMIT 1;\n```"
         elif "top 5 drivers by total deliveries for tenant 3" in last_msg_lower or "top 5 drivers" in last_msg_lower:

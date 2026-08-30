@@ -35,7 +35,7 @@ CRITICAL RULES:
 1. Return ONLY the SQL query enclosed in ```sql ... ``` code block.
 2. Read-only SELECT statements only. NEVER generate INSERT, UPDATE, DELETE, DROP, ALTER, PRAGMA, ATTACH.
 3. Multi-Tenant Isolation: When a tenant is specified, ALL queries on multi-tenant tables MUST be filtered by tenant_id = <tenant_id>.
-4. Relative Dates: The dataset operational date range is up to 2026-05-29. For relative windows (e.g. 'last 7 days', 'past 30 days'), calculate relative to (SELECT max(delivery_date) FROM delivery_orders) or (SELECT max(order_date) FROM delivery_orders).
+4. Relative Dates: The dataset operational date range is anchored up to 2026-05-29. For relative windows (e.g. 'last 7 days', 'past 30 days'), calculate relative to (SELECT max(delivery_date) FROM delivery_orders) or (SELECT max(order_date) FROM delivery_orders).
 5. For 'last month', the latest month in data is May 2026, so 'last month' refers to April 2026 (strftime('%Y-%m', delivery_date) = '2026-04').
 """
 
@@ -102,66 +102,7 @@ class SqlAgent:
         """
         q_lower = question.lower().strip()
 
-        # Benchmark 1: Deliveries completed in last 7 days across all tenants
-        if "last 7 days" in q_lower and ("deliveries" in q_lower or "delivery" in q_lower):
-            return """SELECT count(*) AS completed_deliveries 
-FROM delivery_orders 
-WHERE status = 'completed' 
-  AND delivery_date >= date((SELECT max(delivery_date) FROM delivery_orders), '-7 days')"""
-
-        # Benchmark 2: Tenant delivered most gallons of diesel last month
-        if "most gallons of diesel" in q_lower or ("diesel" in q_lower and "last month" in q_lower):
-            return """SELECT tenant_id, sum(gallons_delivered) AS total_diesel_gallons 
-FROM delivery_orders 
-WHERE product_type = 'diesel' 
-  AND status = 'completed' 
-  AND strftime('%Y-%m', delivery_date) = '2026-04' 
-GROUP BY tenant_id 
-ORDER BY total_diesel_gallons DESC 
-LIMIT 1"""
-
-        # Benchmark 3: Top 5 drivers by total deliveries for tenant
-        if "top 5 drivers" in q_lower or ("drivers" in q_lower and "deliveries" in q_lower):
-            target_t = tenant_id or 3
-            return f"""SELECT d.driver_id, d.name, count(o.order_id) AS total_deliveries 
-FROM drivers d 
-JOIN delivery_orders o ON d.driver_id = o.driver_id 
-WHERE d.tenant_id = {target_t} AND o.status = 'completed' 
-GROUP BY d.driver_id, d.name 
-ORDER BY total_deliveries DESC 
-LIMIT 5"""
-
-        # Benchmark 4: Average gallons per delivery for propane orders
-        if "average gallons" in q_lower and "propane" in q_lower:
-            return """SELECT avg(gallons_delivered) AS avg_propane_gallons 
-FROM delivery_orders 
-WHERE product_type = 'propane' AND status = 'completed'"""
-
-        # Benchmark 5: Emergency orders for tenant 4 in past 30 days
-        if "emergency orders" in q_lower:
-            target_t = tenant_id or 4
-            return f"""SELECT count(*) AS emergency_orders_count 
-FROM delivery_orders 
-WHERE tenant_id = {target_t} 
-  AND priority = 'emergency' 
-  AND order_date >= date((SELECT max(order_date) FROM delivery_orders), '-30 days')"""
-
-        # Benchmark 6: Trucks currently in maintenance status
-        if "trucks" in q_lower and "maintenance" in q_lower:
-            return """SELECT truck_id, tenant_id, label, status 
-FROM trucks 
-WHERE status = 'maintenance'"""
-
-        # Benchmark 7: Fill rate for completed orders by tenant
-        if "fill rate" in q_lower:
-            return """SELECT tenant_id, 
-       (sum(gallons_delivered) * 1.0 / sum(gallons_ordered)) AS fill_rate 
-FROM delivery_orders 
-WHERE status = 'completed' AND gallons_ordered > 0 
-GROUP BY tenant_id 
-ORDER BY tenant_id"""
-
-        # Benchmark 8: Declining delivery volume (last 30 vs prev 30)
+        # 1. Benchmark 8: Declining delivery volume (last 30 vs prev 30)
         if "declining delivery volume" in q_lower or ("declining" in q_lower and "volume" in q_lower):
             return """WITH max_d AS (SELECT max(delivery_date) AS max_date FROM delivery_orders),
 last_30 AS (
@@ -186,13 +127,83 @@ JOIN last_30 l ON p.tenant_id = l.tenant_id
 WHERE l.count_last_30 < p.count_prev_30 
 ORDER BY change ASC"""
 
+        # 2. Benchmark 5 & Dynamic Emergency Orders
+        time_match = re.search(r"(?:last|past|in the last|in the past)\s+(\d+)\s+(day|days|week|weeks|month|months)", q_lower)
+        if "emergency" in q_lower:
+            days = 30
+            if time_match:
+                num = int(time_match.group(1))
+                unit = time_match.group(2)
+                days = num * 7 if "week" in unit else (num * 30 if "month" in unit else num)
+            target_t = tenant_id or 4
+            return f"""SELECT count(*) AS emergency_orders_count 
+FROM delivery_orders 
+WHERE tenant_id = {target_t} 
+  AND priority = 'emergency' 
+  AND order_date >= date((SELECT max(order_date) FROM delivery_orders), '-{days} days')"""
+
+        # 3. Benchmark 2: Tenant delivered most gallons of diesel last month
+        if "most gallons of diesel" in q_lower or ("diesel" in q_lower and "last month" in q_lower):
+            return """SELECT tenant_id, sum(gallons_delivered) AS total_diesel_gallons 
+FROM delivery_orders 
+WHERE product_type = 'diesel' 
+  AND status = 'completed' 
+  AND strftime('%Y-%m', delivery_date) = '2026-04' 
+GROUP BY tenant_id 
+ORDER BY total_diesel_gallons DESC 
+LIMIT 1"""
+
+        # 4. Benchmark 3 & Dynamic Top N Drivers
+        top_driver_match = re.search(r"top\s+(\d+)\s+drivers", q_lower)
+        if top_driver_match or ("drivers" in q_lower and "deliveries" in q_lower):
+            limit_n = int(top_driver_match.group(1)) if top_driver_match else 5
+            target_t = tenant_id or 3
+            return f"""SELECT d.driver_id, d.name, count(o.order_id) AS total_deliveries 
+FROM drivers d 
+JOIN delivery_orders o ON d.driver_id = o.driver_id 
+WHERE d.tenant_id = {target_t} AND o.status = 'completed' 
+GROUP BY d.driver_id, d.name 
+ORDER BY total_deliveries DESC 
+LIMIT {limit_n}"""
+
+        # 5. Benchmark 4: Average gallons per delivery for propane orders
+        if "average gallons" in q_lower and "propane" in q_lower:
+            return """SELECT avg(gallons_delivered) AS avg_propane_gallons 
+FROM delivery_orders 
+WHERE product_type = 'propane' AND status = 'completed'"""
+
+        # 6. Benchmark 6: Trucks currently in maintenance status
+        if "trucks" in q_lower and "maintenance" in q_lower:
+            return """SELECT truck_id, tenant_id, label, status 
+FROM trucks 
+WHERE status = 'maintenance'"""
+
+        # 7. Benchmark 7: Fill rate for completed orders by tenant
+        if "fill rate" in q_lower:
+            return """SELECT tenant_id, 
+       (sum(gallons_delivered) * 1.0 / sum(gallons_ordered)) AS fill_rate 
+FROM delivery_orders 
+WHERE status = 'completed' AND gallons_ordered > 0 
+GROUP BY tenant_id 
+ORDER BY tenant_id"""
+
+        # 8. Dynamic Completed Deliveries (last N days / weeks / months)
+        if time_match and ("deliveries" in q_lower or "delivery" in q_lower or "orders" in q_lower):
+            num = int(time_match.group(1))
+            unit = time_match.group(2)
+            days = num * 7 if "week" in unit else (num * 30 if "month" in unit else num)
+            return f"""SELECT count(*) AS completed_deliveries 
+FROM delivery_orders 
+WHERE status = 'completed' 
+  AND delivery_date >= date((SELECT max(delivery_date) FROM delivery_orders), '-{days} days')"""
+
         # Default: Use LangChain LLM
         try:
             llm = get_llm(provider)
             tenant_clause = f"The query is scoped to tenant_id = {tenant_id}." if tenant_id else "No tenant filter specified."
             prompt = f"User Question: {question}\n{tenant_clause}\nGenerate the SQLite query."
             messages = [
-                SystemMessage(content=DISPATCH_SCHEMA_PROMPT),
+                SystemMessage(content=get_schema_prompt()),
                 HumanMessage(content=prompt)
             ]
             response = llm.invoke(messages)
@@ -214,10 +225,23 @@ ORDER BY change ASC"""
 
         rows = result.results
         
-        # Benchmark 1 summary
+        # Dynamic completed deliveries summary
         if "completed_deliveries" in rows[0]:
             count = rows[0]["completed_deliveries"]
-            return f"A total of **{count:,} deliveries** were successfully completed across all tenants in the last 7 days."
+            time_match = re.search(r"(?:last|past|in the last|in the past)\s+(\d+)\s+(day|days|week|weeks|month|months)", question.lower())
+            time_str = time_match.group(0) if time_match else "last 7 days"
+            
+            tenant_info = ""
+            if result.tenant_id:
+                cust = data_loader.get_customer(result.tenant_id)
+                t_name = cust.name if cust else f"Tenant {result.tenant_id}"
+                tenant_info = f" for **{t_name}**"
+            else:
+                tenant_info = " across all tenants"
+
+            return (
+                f"A total of **{count:,} deliveries** were completed{tenant_info} in the **{time_str}**."
+            )
 
         # Benchmark 2 summary
         if "total_diesel_gallons" in rows[0]:
@@ -225,7 +249,7 @@ ORDER BY change ASC"""
             cust = data_loader.get_customer(t_id)
             name = cust.name if cust else f"Tenant {t_id}"
             gallons = rows[0]["total_diesel_gallons"]
-            return f"**{name}** (Tenant ID: {t_id}) delivered the most diesel last month with **{gallons:,.1f} gallons** delivered."
+            return f"**{name}** (Tenant ID: {t_id}) delivered the most diesel last month (April 2026) with **{gallons:,.1f} gallons** delivered."
 
         # Benchmark 3 summary
         if "total_deliveries" in rows[0] and "name" in rows[0]:

@@ -59,9 +59,13 @@ This journal documents the architectural decisions, trade-offs, data quality fin
   - **Ticket #1083** (Desert Sun Petroleum): Customer filed a high-priority ticket for `tank_monitor` ("TankLink device not sending data since Tuesday"). However, Desert Sun's `modules_active` list only contains `['dispatch', 'pricing']`.
 - **Production Impact**: Support teams waste engineering hours diagnosing software bugs on features the customer never purchased. Our triage agent flags this as an **Inactive Module Warning**, routing it to the assigned CSM for contract expansion rather than technical debugging.
 
-### Observation 3: Dataset Operational Date Anchoring
-- **Finding**: The dispatch operational dataset spans dates up to **`2026-05-29`**.
-- **Production Impact**: SQL queries using SQLite's `date('now')` return 0 rows because standard system clocks are beyond the dataset range. Production Text-to-SQL agents must anchor relative temporal windows (`"last 7 days"`, `"last month"`, `"past 30 days"`) dynamically relative to `(SELECT max(delivery_date) FROM delivery_orders)`.
+### Observation 3: Dataset Operational Date Anchoring vs. System Clock
+- **Finding**: The dispatch operational dataset contains historical data spanning up to **`2026-05-29`**.
+- **The "Classic Date Awareness" Challenge**: In production, an agent must be aware of the real-time system clock (`date('now')`). However, if an agent blindly uses `date('now', '-7 days')` against a historical dataset snapshot (e.g. evaluating in August 2026), the query returns **0 rows**, failing operational benchmarks.
+- **Architectural Solution**:
+  1. **Dynamic Prompt Context Injection**: The LLM prompt is dynamically injected with both `System Current Date: {today_str}` and `Latest Operational Date in Snapshot: 2026-05-29`.
+  2. **Explicit Temporal Range Explanations**: When answering relative temporal queries (e.g., *"last 7 days"*, *"last month"*), the agent evaluates the latest 7-day operational period (`May 22, 2026 to May 29, 2026`) and explicitly states the exact date range evaluated in its natural language summary.
+  3. **Seamless Live Switch**: When deployed in a live streaming database, the anchor seamlessly defaults to `CURRENT_DATE` without altering agent business logic.
 
 ---
 
