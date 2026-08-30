@@ -128,10 +128,33 @@ export const ChatContainer: React.FC = () => {
           (err) => {
             console.warn('Speech recognition error:', err);
             setIsRecording(false);
+            if (err === 'not-allowed' || err?.name === 'NotAllowedError') {
+              const micErrorMsg: ChatMessage = {
+                id: `msg-mic-err-${Date.now()}`,
+                role: 'assistant',
+                content: `⚠️ **Microphone Permission Blocked** (\`not-allowed\`):\n\nYour browser or operating system blocked microphone access.\n\n**How to resolve:**\n1. Click the **🔒 (Lock)** or **🎙️ (Microphone)** icon in your browser's address bar.\n2. Set Microphone to **Allow** and reload the page.\n3. On macOS, ensure your browser has permission in **System Settings → Privacy & Security → Microphone**.\n4. You can also type your query directly or use the one-click quick prompt chips above.`,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              };
+              setMessages((prev) => [...prev, micErrorMsg]);
+            }
           }
         );
       } else {
-        await audioService.startRecording();
+        try {
+          await audioService.startRecording();
+        } catch (e: any) {
+          console.error(e);
+          setIsRecording(false);
+          if (e.name === 'NotAllowedError' || e.message?.includes('not-allowed')) {
+            const micErrorMsg: ChatMessage = {
+              id: `msg-mic-err-${Date.now()}`,
+              role: 'assistant',
+              content: `⚠️ **Microphone Permission Blocked**: Please allow microphone access in your browser settings to use voice mode.`,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            };
+            setMessages((prev) => [...prev, micErrorMsg]);
+          }
+        }
       }
     }
   };

@@ -15,12 +15,14 @@ export const VoiceHUD: React.FC = () => {
   const [transcript, setTranscript] = useState<string>('');
   const [agentResponse, setAgentResponse] = useState<string>('');
   const [lastExecutedSql, setLastExecutedSql] = useState<string | null>(null);
+  const [micError, setMicError] = useState<string | null>(null);
 
   const startListening = async () => {
     setVoiceState('listening');
     setTranscript('');
     setAgentResponse('');
     setLastExecutedSql(null);
+    setMicError(null);
 
     if (audioService.isSpeechRecognitionSupported()) {
       audioService.startSpeechRecognition(
@@ -33,11 +35,21 @@ export const VoiceHUD: React.FC = () => {
         (err) => {
           console.warn('Voice error:', err);
           setVoiceState('idle');
+          if (err === 'not-allowed' || err?.name === 'NotAllowedError') {
+            setMicError(
+              'Microphone access was blocked (not-allowed). Please click the Lock 🔒 or Mic 🎙️ icon in your address bar and grant permission.'
+            );
+          }
         }
       );
     } else {
       // Fallback MediaRecorder
-      await audioService.startRecording();
+      try {
+        await audioService.startRecording();
+      } catch (e: any) {
+        setVoiceState('idle');
+        setMicError('Microphone permission blocked. Please allow microphone access in your browser settings.');
+      }
     }
   };
 
@@ -101,6 +113,13 @@ export const VoiceHUD: React.FC = () => {
         <p className="text-xs text-slate-400 mt-1">
           Tap the voice orb below to speak your question or ticket brief request.
         </p>
+
+        {micError && (
+          <div className="mt-3 p-3 rounded-lg bg-amber-950/80 border border-amber-800/80 text-amber-200 text-xs text-left max-w-md mx-auto">
+            <span className="font-semibold block mb-1">⚠️ Microphone Permission Blocked:</span>
+            <span>{micError}</span>
+          </div>
+        )}
       </div>
 
       {/* Center Interactive Voice Orb */}
