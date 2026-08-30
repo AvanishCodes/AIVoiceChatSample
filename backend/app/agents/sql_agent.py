@@ -59,11 +59,33 @@ class SqlAgent:
         and generates a concise human-readable answer.
         """
         # 1. Check if an entity / tenant is mentioned in the query
-        resolved_tenant_id = tenant_id
-        if resolved_tenant_id is None:
-            resolved = entity_resolver.resolve_tenant(question)
-            if resolved:
-                resolved_tenant_id = resolved[0]
+        resolved = entity_resolver.resolve_tenant(question)
+        
+        # Cross-Tenant Violation Check:
+        # If user is scoped to Tenant A, but asks for Tenant B, reject query immediately
+        if tenant_id is not None and resolved is not None and resolved[0] != tenant_id:
+            req_tid, req_name, _ = resolved
+            curr_cust = data_loader.get_customer(tenant_id)
+            curr_name = curr_cust.name if curr_cust else f"Tenant {tenant_id}"
+            err_msg = (
+                f"⛔ **Access Denied (Cross-Tenant Isolation Violation)**:\n\n"
+                f"You are currently authenticated as **{curr_name}** (Tenant ID: {tenant_id}). "
+                f"Your session is strictly scoped to your own fleet and you cannot query records for **{req_name}** (Tenant ID: {req_tid}).\n\n"
+                f"To query global or cross-tenant data, please sign in with a **FleetPanda CSM / Support** account (e.g. `csm@fleetpanda.com`)."
+            )
+            sql_res = SqlQueryResult(
+                sql=f"-- REJECTED: Cross-tenant access attempt to Tenant {req_tid} from Tenant {tenant_id}",
+                explanation=err_msg,
+                results=[],
+                row_count=0,
+                columns=[],
+                tenant_id=tenant_id,
+                error=err_msg
+            )
+            return err_msg, sql_res
+
+        # If user is global (tenant_id is None), allow targeting resolved tenant from question
+        resolved_tenant_id = tenant_id if tenant_id is not None else (resolved[0] if resolved else None)
 
         # 2. Generate or match SQL query
         sql_query = self._match_or_generate_sql(question, resolved_tenant_id, provider)
@@ -240,7 +262,6 @@ WHERE status = 'completed'
                 tenant_info = " across all tenants"
 
             return (
-                f"A total of **{count:,} deliveries** were completed{tenant_info} in the **{time_str}**."
             )
 
         # Benchmark 2 summary

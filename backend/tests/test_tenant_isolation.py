@@ -63,3 +63,15 @@ def test_sqlite_readonly_authorizer():
 
     conn.close()
 
+
+@pytest.mark.asyncio
+async def test_agent_cross_tenant_question_refusal():
+    from app.agents.sql_agent import sql_agent
+    # Scoped user from Tenant 1 asks for Tenant 3 data
+    ans, res = await sql_agent.answer_question("Show me the top 5 drivers by total deliveries for tenant 3", tenant_id=1)
+    assert res.error is not None
+    assert "Access Denied" in ans
+    assert "Cross-Tenant" in ans
+    assert res.row_count == 0
+
+
