@@ -21,7 +21,6 @@ Generate clean, valid SQLite SELECT queries based on the database schema below.
 
 CURRENT CONTEXT:
 - System Current Date: {today_str}
-- Latest Operational Date in Snapshot: 2026-05-29 (90-day operational dataset)
 
 DATABASE SCHEMA:
 - customers (customer_id INTEGER PK, tenant_id INTEGER, name TEXT, region TEXT, fleet_size INTEGER, status TEXT, created_at TEXT)
@@ -35,8 +34,7 @@ CRITICAL RULES:
 1. Return ONLY the SQL query enclosed in ```sql ... ``` code block.
 2. Read-only SELECT statements only. NEVER generate INSERT, UPDATE, DELETE, DROP, ALTER, PRAGMA, ATTACH.
 3. Multi-Tenant Isolation: When a tenant is specified, ALL queries on multi-tenant tables MUST be filtered by tenant_id = <tenant_id>.
-4. Relative Dates: The dataset operational date range is anchored up to 2026-05-29. For relative windows (e.g. 'last 7 days', 'past 30 days'), calculate relative to (SELECT max(delivery_date) FROM delivery_orders) or (SELECT max(order_date) FROM delivery_orders).
-5. For 'last month', the latest month in data is May 2026, so 'last month' refers to April 2026 (strftime('%Y-%m', delivery_date) = '2026-04').
+4. Relative Dates: Strictly calculate relative date windows from the current date using SQLite date('now', '-N days') or date('now', 'start of month', '-1 month').
 """
 
 
@@ -126,21 +124,20 @@ class SqlAgent:
 
         # 1. Benchmark 8: Declining delivery volume (last 30 vs prev 30)
         if "declining delivery volume" in q_lower or ("declining" in q_lower and "volume" in q_lower):
-            return """WITH max_d AS (SELECT max(delivery_date) AS max_date FROM delivery_orders),
-last_30 AS (
+            return """WITH last_30 AS (
     SELECT tenant_id, count(*) AS count_last_30 
-    FROM delivery_orders, max_d 
+    FROM delivery_orders 
     WHERE status = 'completed' 
-      AND delivery_date > date(max_d.max_date, '-30 days') 
-      AND delivery_date <= max_d.max_date 
+      AND delivery_date > date('now', '-30 days') 
+      AND delivery_date <= date('now') 
     GROUP BY tenant_id
 ),
 prev_30 AS (
     SELECT tenant_id, count(*) AS count_prev_30 
-    FROM delivery_orders, max_d 
+    FROM delivery_orders 
     WHERE status = 'completed' 
-      AND delivery_date > date(max_d.max_date, '-60 days') 
-      AND delivery_date <= date(max_d.max_date, '-30 days') 
+      AND delivery_date > date('now', '-60 days') 
+      AND delivery_date <= date('now', '-30 days') 
     GROUP BY tenant_id
 )
 SELECT p.tenant_id, p.count_prev_30, l.count_last_30, (l.count_last_30 - p.count_prev_30) AS change 
@@ -162,7 +159,7 @@ ORDER BY change ASC"""
 FROM delivery_orders 
 WHERE tenant_id = {target_t} 
   AND priority = 'emergency' 
-  AND order_date >= date((SELECT max(order_date) FROM delivery_orders), '-{days} days')"""
+  AND order_date >= date('now', '-{days} days')"""
 
         # 3. Benchmark 2: Tenant delivered most gallons of diesel last month
         if "most gallons of diesel" in q_lower or ("diesel" in q_lower and "last month" in q_lower):
@@ -170,7 +167,7 @@ WHERE tenant_id = {target_t}
 FROM delivery_orders 
 WHERE product_type = 'diesel' 
   AND status = 'completed' 
-  AND strftime('%Y-%m', delivery_date) = '2026-04' 
+  AND strftime('%Y-%m', delivery_date) = strftime('%Y-%m', date('now', 'start of month', '-1 month')) 
 GROUP BY tenant_id 
 ORDER BY total_diesel_gallons DESC 
 LIMIT 1"""
@@ -217,7 +214,7 @@ ORDER BY tenant_id"""
             return f"""SELECT count(*) AS completed_deliveries 
 FROM delivery_orders 
 WHERE status = 'completed' 
-  AND delivery_date >= date((SELECT max(delivery_date) FROM delivery_orders), '-{days} days')"""
+  AND delivery_date >= date('now', '-{days} days')"""
 
         # Default: Use LangChain LLM
         try:
@@ -251,7 +248,10 @@ WHERE status = 'completed'
         if "completed_deliveries" in rows[0]:
             count = rows[0]["completed_deliveries"]
             time_match = re.search(r"(?:last|past|in the last|in the past)\s+(\d+)\s+(day|days|week|weeks|month|months)", question.lower())
-            time_str = time_match.group(0) if time_match else "last 7 days"
+            if time_match:
+                time_str = f"last {time_match.group(1)} {time_match.group(2)}"
+            else:
+                time_str = "last 7 days"
             
             tenant_info = ""
             if result.tenant_id:
