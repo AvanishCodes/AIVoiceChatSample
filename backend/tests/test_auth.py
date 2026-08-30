@@ -73,3 +73,16 @@ def test_auth_endpoints(client):
     assert refresh_resp.status_code == 200
     assert "access_token" in refresh_resp.json()
 
+    # Test /api/chat E2E with Bearer token
+    chat_resp = client.post(
+        "/api/chat",
+        headers={"Authorization": f"Bearer {data['access_token']}"},
+        json={"message": "How many deliveries were completed in the last 7 days?"}
+    )
+    assert chat_resp.status_code == 200
+    chat_data = chat_resp.json()
+    assert "reply" in chat_data
+    assert isinstance(chat_data["reply"], str)
+    assert "deliveries" in chat_data["reply"]
+
+

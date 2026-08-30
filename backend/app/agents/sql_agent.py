@@ -261,8 +261,7 @@ WHERE status = 'completed'
             else:
                 tenant_info = " across all tenants"
 
-            return (
-            )
+            return f"A total of **{count:,} deliveries** were completed{tenant_info} in the **{time_str}**."
 
         # Benchmark 2 summary
         if "total_diesel_gallons" in rows[0]:

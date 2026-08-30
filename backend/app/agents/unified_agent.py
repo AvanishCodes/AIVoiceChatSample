@@ -127,7 +127,7 @@ class UnifiedAgent:
         exec_time = (time.time() - start_time) * 1000.0
 
         return ChatResponse(
-            reply=reply,
+            reply=str(reply or ""),
             intent=intent,
             sql_result=sql_res,
             ticket_brief=ticket_brief_res,
